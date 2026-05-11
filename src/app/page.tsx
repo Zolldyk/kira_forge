@@ -8,8 +8,10 @@ import { StreamingMessage } from "@/components/StreamingMessage";
 import { PromptCounter } from "@/components/PromptCounter";
 import { type Message, type PaymentState } from "@/types";
 import { PaywallBanner } from "@/components/PaywallBanner";
+import { KiraPayModal } from "@/components/KiraPayModal";
 
 const FREE_LIMIT = Number(process.env.NEXT_PUBLIC_FREE_PROMPTS ?? '3')
+const UNLOCK_PRICE = Number(process.env.NEXT_PUBLIC_UNLOCK_PRICE ?? '5')
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -21,6 +23,9 @@ export default function Home() {
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [promptsRemaining, setPromptsRemaining] = useState<number>(0);
   const [paymentState, setPaymentState] = useState<PaymentState>('idle');
+  const [linkId, setLinkId] = useState<string | null>(null);
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const messagesRef = useRef<Message[]>([]);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
@@ -45,6 +50,28 @@ export default function Home() {
   }, [messages]);
 
   useEffect(() => () => { readerRef.current?.cancel(); }, []);
+
+  useEffect(() => {
+    if (paymentState !== 'checkout') return
+    setCheckoutUrl(null)
+    setLinkId(null)
+    setLinkError(null)
+
+    fetch('/api/payment/link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: UNLOCK_PRICE, sessionId: sessionIdRef.current }),
+    })
+      .then(async (res) => {
+        const json = await res.json()
+        if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
+        setLinkId(json.data.linkId)
+        setCheckoutUrl(json.data.checkoutUrl)
+      })
+      .catch((e: unknown) => {
+        setLinkError(e instanceof Error ? e.message : 'Failed to generate payment link')
+      })
+  }, [paymentState])
 
   const isAtLimit = (promptCount >= FREE_LIMIT && !isUnlocked) || (isUnlocked && promptsRemaining <= 0);
 
@@ -139,6 +166,22 @@ export default function Home() {
       textareaRef.current.style.height = "auto"
       textareaRef.current.focus()
     }
+  }, [])
+
+  const handleModalCancel = useCallback(() => {
+    setPaymentState('idle')
+    setCheckoutUrl(null)
+    setLinkId(null)
+    setLinkError(null)
+  }, [])
+
+  const handleModalConfirm = useCallback(() => {
+    setPaymentState('routing')
+  }, [])
+
+  const handleRetryLink = useCallback(() => {
+    setPaymentState('idle')
+    setTimeout(() => setPaymentState('checkout'), 50)
   }, [])
 
   const handleTextareaInput = () => {
@@ -295,6 +338,15 @@ export default function Home() {
             </div>
           </ScrollArea>
         </aside>
+
+        <KiraPayModal
+          open={paymentState === 'checkout'}
+          checkoutUrl={checkoutUrl}
+          linkError={linkError}
+          onCancel={handleModalCancel}
+          onConfirm={handleModalConfirm}
+          onRetryLink={handleRetryLink}
+        />
       </main>
     </div>
   );
