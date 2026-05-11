@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { getSession, incrementPrompt, decrementPaidPrompt } from "@/lib/session";
 import { StreamingMessage } from "@/components/StreamingMessage";
 import { PromptCounter } from "@/components/PromptCounter";
-import { type Message, type PaymentState } from "@/types";
+import { type Message, type PaymentState, type PaymentStatus } from "@/types";
 import { PaywallBanner } from "@/components/PaywallBanner";
 import { KiraPayModal } from "@/components/KiraPayModal";
 
@@ -26,10 +26,13 @@ export default function Home() {
   const [linkId, setLinkId] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [originChain, setOriginChain] = useState<string>('ethereum');
+  const [routingStep, setRoutingStep] = useState<1 | 2>(1);
 
   const messagesRef = useRef<Message[]>([]);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const sessionIdRef = useRef<string>("");
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +75,45 @@ export default function Home() {
         setLinkError(e instanceof Error ? e.message : 'Failed to generate payment link')
       })
   }, [paymentState])
+
+  useEffect(() => {
+    if (paymentState !== 'routing' || !linkId) return
+
+    async function pollStatus() {
+      try {
+        const res = await fetch(`/api/payment/status/${linkId}`)
+        const json = await res.json()
+        if (!res.ok) return
+        const data: PaymentStatus = json.data
+        if (data.status === 'confirmed') {
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current)
+            intervalRef.current = null
+          }
+          setPaymentState('confirmed')
+        } else if (data.status === 'failed') {
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current)
+            intervalRef.current = null
+          }
+          setPaymentState('error')
+        } else {
+          setRoutingStep(2)
+        }
+      } catch {
+        // network error — keep polling silently
+      }
+    }
+
+    intervalRef.current = setInterval(pollStatus, 3000)
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+  }, [paymentState, linkId])
 
   const isAtLimit = (promptCount >= FREE_LIMIT && !isUnlocked) || (isUnlocked && promptsRemaining <= 0);
 
@@ -175,7 +217,9 @@ export default function Home() {
     setLinkError(null)
   }, [])
 
-  const handleModalConfirm = useCallback(() => {
+  const handleModalConfirm = useCallback((chain: string) => {
+    setOriginChain(chain)
+    setRoutingStep(1)
     setPaymentState('routing')
   }, [])
 
@@ -340,7 +384,10 @@ export default function Home() {
         </aside>
 
         <KiraPayModal
-          open={paymentState === 'checkout'}
+          open={paymentState === 'checkout' || paymentState === 'routing'}
+          paymentState={paymentState}
+          routingStep={routingStep}
+          originChain={originChain}
           checkoutUrl={checkoutUrl}
           linkError={linkError}
           onCancel={handleModalCancel}
