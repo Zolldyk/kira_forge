@@ -27,3 +27,11 @@ export interface SessionState {
   unlockedUntil: number;
   promptsRemaining: number;
 }
+
+export interface SidebarEntry {
+  id: string;
+  chain: string;
+  amount: number;
+  status: 'confirmed' | 'pending' | 'failed';
+  createdAt: number;
+}

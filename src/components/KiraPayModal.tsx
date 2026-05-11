@@ -1,11 +1,13 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Dialog } from '@base-ui/react/dialog'
 import { RadioGroup } from '@base-ui/react/radio-group'
 import { ChainBadge } from '@/components/ChainBadge'
 import { ChainOption } from '@/components/ChainOption'
 import { RoutingIndicator } from '@/components/RoutingIndicator'
+import { SettlementConfirmation } from '@/components/SettlementConfirmation'
+import { PollingFallback } from '@/components/PollingFallback'
 import { type PaymentState } from '@/types'
 
 declare global {
@@ -38,17 +40,27 @@ export interface KiraPayModalProps {
   paymentState: PaymentState
   routingStep: 1 | 2
   originChain: string
+  confirmedData: { txHash: string; explorerUrl: string } | null
+  errorTxHash: string
   checkoutUrl: string | null
   linkError: string | null
   onCancel: () => void
   onConfirm: (chain: string) => void
   onRetryLink: () => void
+  onContinue: () => void
 }
 
-export function KiraPayModal({ open, paymentState, routingStep, originChain, checkoutUrl, linkError, onCancel, onConfirm, onRetryLink }: KiraPayModalProps) {
+export function KiraPayModal({ open, paymentState, routingStep, originChain, confirmedData, errorTxHash, checkoutUrl, linkError, onCancel, onConfirm, onRetryLink, onContinue }: KiraPayModalProps) {
   const [detectedChain, setDetectedChain] = useState<string>('ethereum')
   const [detectedBalance, setDetectedBalance] = useState<string | undefined>(undefined)
   const [selectedChain, setSelectedChain] = useState<string>('ethereum')
+  const errorRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (paymentState === 'error') {
+      errorRef.current?.focus()
+    }
+  }, [paymentState])
 
   useEffect(() => {
     if (!open) return
@@ -90,14 +102,86 @@ export function KiraPayModal({ open, paymentState, routingStep, originChain, che
     <Dialog.Root
       open={open}
       onOpenChange={(o) => {
-        if (!o && paymentState === 'checkout') onCancel()
-        // routing: do nothing — payment is in-flight
+        if (!o && (paymentState === 'checkout' || paymentState === 'error')) onCancel()
+        // routing/confirmed/polling: do nothing — payment in-flight
       }}
     >
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
         <Dialog.Popup className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 max-w-sm w-full bg-[var(--kf-surface)] rounded-xl border border-[var(--kf-border)] p-6">
-          {paymentState === 'routing' ? (
+          {paymentState === 'error' ? (
+            <>
+              <Dialog.Title className="sr-only">Payment Timeout</Dialog.Title>
+              <Dialog.Description className="sr-only">
+                Settlement could not be confirmed within 2 minutes
+              </Dialog.Description>
+              <div
+                ref={errorRef}
+                tabIndex={-1}
+                className="flex flex-col gap-4 py-2 focus-visible:outline-none"
+              >
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-500/15 shrink-0">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" stroke="#ef4444" strokeWidth="2" />
+                      <line x1="15" y1="9" x2="9" y2="15" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" />
+                      <line x1="9" y1="9" x2="15" y2="15" stroke="#ef4444" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <h2 className="text-base font-semibold text-[var(--kf-heading)]">Confirmation timed out</h2>
+                    <p className="text-sm text-[var(--kf-muted)]">
+                      Settlement wasn&apos;t confirmed within 2 minutes. Your transaction may still settle — check the Explorer.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="w-full rounded-lg border border-[var(--kf-border)] bg-[var(--kf-background)] px-4 py-3 flex flex-col gap-1">
+                  <p className="text-xs text-[var(--kf-muted)]">Transaction hash</p>
+                  <p className="text-xs font-mono text-[var(--kf-body)] break-all">
+                    {errorTxHash || 'Unavailable'}
+                  </p>
+                  {errorTxHash && (
+                    <a
+                      href={`https://explorer.solana.com/tx/${errorTxHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-indigo-400 hover:text-indigo-300 underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950 rounded"
+                    >
+                      View on Solana Explorer ↗
+                    </a>
+                  )}
+                </div>
+
+                <Dialog.Close
+                  className="w-full py-2.5 rounded-lg bg-[var(--kf-surface)] border border-[var(--kf-border)] text-sm text-[var(--kf-muted)] hover:text-[var(--kf-body)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950"
+                >
+                  Close
+                </Dialog.Close>
+              </div>
+            </>
+          ) : paymentState === 'confirmed' && confirmedData ? (
+            <>
+              <Dialog.Title className="sr-only">Payment Confirmed</Dialog.Title>
+              <Dialog.Description className="sr-only">
+                Your cross-chain payment has settled on Solana
+              </Dialog.Description>
+              <SettlementConfirmation
+                txHash={confirmedData.txHash}
+                explorerUrl={confirmedData.explorerUrl}
+                originChain={originChain}
+                onContinue={onContinue}
+              />
+            </>
+          ) : paymentState === 'polling' ? (
+            <>
+              <Dialog.Title className="sr-only">Waiting for Solana Confirmation</Dialog.Title>
+              <Dialog.Description className="sr-only">
+                Your transaction was detected — waiting for cross-chain settlement
+              </Dialog.Description>
+              <PollingFallback originChain={originChain} txHash={errorTxHash || undefined} />
+            </>
+          ) : paymentState === 'routing' ? (
             <>
               <Dialog.Title className="text-base font-semibold text-[var(--kf-heading)] mb-4">
                 Processing Payment

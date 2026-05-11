@@ -3,10 +3,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
-import { getSession, incrementPrompt, decrementPaidPrompt } from "@/lib/session";
+import { getSession, incrementPrompt, decrementPaidPrompt, setUnlocked } from "@/lib/session";
 import { StreamingMessage } from "@/components/StreamingMessage";
 import { PromptCounter } from "@/components/PromptCounter";
-import { type Message, type PaymentState, type PaymentStatus } from "@/types";
+import { type Message, type PaymentState, type PaymentStatus, type SidebarEntry } from "@/types";
+import { PaymentSidebarEntry } from "@/components/PaymentSidebarEntry";
 import { PaywallBanner } from "@/components/PaywallBanner";
 import { KiraPayModal } from "@/components/KiraPayModal";
 
@@ -28,11 +29,16 @@ export default function Home() {
   const [linkError, setLinkError] = useState<string | null>(null);
   const [originChain, setOriginChain] = useState<string>('ethereum');
   const [routingStep, setRoutingStep] = useState<1 | 2>(1);
+  const [confirmedData, setConfirmedData] = useState<{ txHash: string; explorerUrl: string } | null>(null);
+  const [errorTxHash, setErrorTxHash] = useState<string>('');
+  const [sidebarEntries, setSidebarEntries] = useState<SidebarEntry[]>([]);
+  const [isLoadingSidebar, setIsLoadingSidebar] = useState<boolean>(true);
 
   const messagesRef = useRef<Message[]>([]);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const sessionIdRef = useRef<string>("");
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingStartTimeRef = useRef<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -42,6 +48,17 @@ export default function Home() {
     setPromptCount(session.promptCount);
     setIsUnlocked(session.isUnlocked);
     setPromptsRemaining(session.promptsRemaining);
+
+    const seed: SidebarEntry[] = [
+      { id: 'seed-1', chain: 'polygon', amount: 7, status: 'confirmed', createdAt: Date.now() - 3600000 },
+      { id: 'seed-2', chain: 'base', amount: 5, status: 'confirmed', createdAt: Date.now() - 7200000 },
+      { id: 'seed-3', chain: 'ethereum', amount: 5, status: 'confirmed', createdAt: Date.now() - 10800000 },
+    ]
+    const timer = setTimeout(() => {
+      setSidebarEntries(seed)
+      setIsLoadingSidebar(false)
+    }, 400)
+    return () => clearTimeout(timer)
   }, []);
 
   useEffect(() => {
@@ -77,7 +94,29 @@ export default function Home() {
   }, [paymentState])
 
   useEffect(() => {
-    if (paymentState !== 'routing' || !linkId) return
+    if ((paymentState !== 'routing' && paymentState !== 'polling') || !linkId) return
+
+    if (pollingStartTimeRef.current === null) {
+      pollingStartTimeRef.current = Date.now()
+    }
+    const startTime = pollingStartTimeRef.current
+    const elapsed = Date.now() - startTime
+
+    let fallbackTimer: NodeJS.Timeout | undefined
+    if (paymentState === 'routing') {
+      fallbackTimer = setTimeout(() => {
+        setPaymentState('polling')
+      }, Math.max(0, 5000 - elapsed))
+    }
+
+    const hardTimeoutTimer = setTimeout(() => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+      pollingStartTimeRef.current = null
+      setPaymentState('error')
+    }, Math.max(0, 120000 - elapsed))
 
     async function pollStatus() {
       try {
@@ -90,15 +129,34 @@ export default function Home() {
             clearInterval(intervalRef.current)
             intervalRef.current = null
           }
+          pollingStartTimeRef.current = null
+          setUnlocked(Date.now() + 86400000)
+          setIsUnlocked(true)
+          setPromptsRemaining(20)
+          const txHash = data.txHash ?? ''
+          setConfirmedData({
+            txHash,
+            explorerUrl: `https://explorer.solana.com/tx/${txHash}`,
+          })
+          const newEntry: SidebarEntry = {
+            id: crypto.randomUUID(),
+            chain: originChain,
+            amount: UNLOCK_PRICE,
+            status: 'confirmed',
+            createdAt: Date.now(),
+          }
+          setSidebarEntries(prev => [newEntry, ...prev])
           setPaymentState('confirmed')
         } else if (data.status === 'failed') {
           if (intervalRef.current) {
             clearInterval(intervalRef.current)
             intervalRef.current = null
           }
+          pollingStartTimeRef.current = null
           setPaymentState('error')
         } else {
-          setRoutingStep(2)
+          if (data.txHash) setErrorTxHash(data.txHash)
+          if (paymentState === 'routing') setRoutingStep(2)
         }
       } catch {
         // network error — keep polling silently
@@ -108,6 +166,8 @@ export default function Home() {
     intervalRef.current = setInterval(pollStatus, 3000)
 
     return () => {
+      if (fallbackTimer) clearTimeout(fallbackTimer)
+      clearTimeout(hardTimeoutTimer)
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
         intervalRef.current = null
@@ -215,6 +275,8 @@ export default function Home() {
     setCheckoutUrl(null)
     setLinkId(null)
     setLinkError(null)
+    pollingStartTimeRef.current = null
+    setErrorTxHash('')
   }, [])
 
   const handleModalConfirm = useCallback((chain: string) => {
@@ -227,6 +289,13 @@ export default function Home() {
     setPaymentState('idle')
     setTimeout(() => setPaymentState('checkout'), 50)
   }, [])
+
+  const handleContinue = useCallback(() => {
+    const pending = input.trim()
+    setPaymentState('idle')
+    setConfirmedData(null)
+    if (pending) sendMessage(pending)
+  }, [input, sendMessage])
 
   const handleTextareaInput = () => {
     const el = textareaRef.current;
@@ -375,24 +444,51 @@ export default function Home() {
             </span>
           </div>
           <ScrollArea className="flex-1">
-            <div className="flex items-center justify-center px-4 py-8">
-              <p className="text-sm text-[var(--kf-muted)] text-center leading-relaxed">
-                No payments yet — your first payment will appear here
-              </p>
-            </div>
+            {isLoadingSidebar ? (
+              <div className="flex flex-col gap-0">
+                {[1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-3 px-4 py-3 border-b border-[var(--kf-border)]"
+                  >
+                    <div className="w-[18px] h-[18px] rounded-full bg-[var(--kf-surface)] animate-pulse shrink-0" />
+                    <div className="flex flex-col gap-1.5 flex-1">
+                      <div className="h-3 rounded bg-[var(--kf-surface)] animate-pulse w-20" />
+                      <div className="h-2.5 rounded bg-[var(--kf-surface)] animate-pulse w-10" />
+                    </div>
+                    <div className="h-5 w-16 rounded bg-[var(--kf-surface)] animate-pulse shrink-0" />
+                  </div>
+                ))}
+              </div>
+            ) : sidebarEntries.length === 0 ? (
+              <div className="flex items-center justify-center px-4 py-8">
+                <p className="text-sm text-[var(--kf-muted)] text-center leading-relaxed">
+                  No payments yet — your first payment will appear here
+                </p>
+              </div>
+            ) : (
+              <ul role="list" aria-live="polite" className="flex flex-col gap-0">
+                {sidebarEntries.map((entry) => (
+                  <PaymentSidebarEntry key={entry.id} entry={entry} />
+                ))}
+              </ul>
+            )}
           </ScrollArea>
         </aside>
 
         <KiraPayModal
-          open={paymentState === 'checkout' || paymentState === 'routing'}
+          open={paymentState === 'checkout' || paymentState === 'routing' || paymentState === 'confirmed' || paymentState === 'polling' || paymentState === 'error'}
           paymentState={paymentState}
           routingStep={routingStep}
           originChain={originChain}
+          confirmedData={confirmedData}
+          errorTxHash={errorTxHash}
           checkoutUrl={checkoutUrl}
           linkError={linkError}
           onCancel={handleModalCancel}
           onConfirm={handleModalConfirm}
           onRetryLink={handleRetryLink}
+          onContinue={handleContinue}
         />
       </main>
     </div>
