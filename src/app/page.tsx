@@ -43,6 +43,12 @@ export default function Home() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('demo') === 'paywall') {
+      localStorage.setItem('kf-promptCount', String(FREE_LIMIT));
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+
     const session = getSession();
     sessionIdRef.current = session.sessionId;
     setPromptCount(session.promptCount);
