@@ -1,23 +1,23 @@
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { GoogleGenAI } from '@google/genai'
 import { SYSTEM_PROMPT } from './system-prompt'
 import { type Message } from '@/types'
 
-const client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
 
 export async function streamChat(messages: Message[]): Promise<ReadableStream> {
-  const model = client.getGenerativeModel({
-    model: 'gemini-1.5-flash',
-    systemInstruction: SYSTEM_PROMPT,
-  })
-
   const history = messages.slice(0, -1).map((m) => ({
     role: m.role === 'user' ? 'user' : 'model',
     parts: [{ text: m.content }],
   }))
 
   const lastMessage = messages[messages.length - 1]
-  const chat = model.startChat({ history })
-  const result = await chat.sendMessageStream(lastMessage.content)
+  const chat = ai.chats.create({
+    model: 'gemini-2.0-flash',
+    config: { systemInstruction: SYSTEM_PROMPT },
+    history,
+  })
+
+  const result = await chat.sendMessageStream({ message: lastMessage.content })
 
   const encoder = new TextEncoder()
 
@@ -28,8 +28,8 @@ export async function streamChat(messages: Message[]): Promise<ReadableStream> {
       }, 30_000)
 
       try {
-        for await (const chunk of result.stream) {
-          const text = chunk.text()
+        for await (const chunk of result) {
+          const text = chunk.text
           if (text) controller.enqueue(encoder.encode(text))
         }
         controller.close()
