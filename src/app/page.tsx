@@ -47,6 +47,14 @@ export default function Home() {
     if (params.get('demo') === 'paywall') {
       localStorage.setItem('kf-promptCount', String(FREE_LIMIT));
       window.history.replaceState(null, '', window.location.pathname);
+      const demoMessages: Message[] = [
+        { id: 'demo-1', role: 'user', content: 'How do I create an SPL token on Solana?', createdAt: Date.now() - 120000 },
+        { id: 'demo-2', role: 'assistant', content: 'To create an SPL token on Solana you use the SPL Token program. Run `spl-token create-token` with the Solana CLI, then create an associated token account and mint supply to it.', createdAt: Date.now() - 115000 },
+        { id: 'demo-3', role: 'user', content: 'Explain cross-chain routing with KIRAPAY', createdAt: Date.now() - 60000 },
+        { id: 'demo-4', role: 'assistant', content: 'KIRAPAY accepts payments on Ethereum, Polygon, and Base then bridges and settles on Solana. You initiate a payment link, the user pays on their preferred chain, and KIRAPAY handles the routing and final settlement automatically.', createdAt: Date.now() - 55000 },
+      ];
+      messagesRef.current = demoMessages;
+      setMessages(demoMessages);
     }
 
     const session = getSession();
