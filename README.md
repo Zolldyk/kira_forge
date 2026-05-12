@@ -80,8 +80,6 @@ https://<your-vercel-domain>/api/webhooks/kirapay
 
 Replace `<your-vercel-domain>` with your actual Vercel deployment URL (e.g. `kiraforge.vercel.app`).
 
-> **⚠️ 24-Hour Warning:** Webhook registration can take up to 24 hours to activate. Register well before your demo — do not wait until the last minute.
-
 ### Local Development Webhooks
 
 To test the payment flow locally, expose your dev server with [ngrok](https://ngrok.com):
